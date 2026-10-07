@@ -390,6 +390,7 @@ summarize_failure() {  # summarize_failure <titre> <journal> [config.log]
 if [ "$ABI" = "armeabi-v7a" ] && [ "$ARM32_OK" != 1 ]; then
   {
     echo "### 32 bits : le compilateur ne sait pas compiler les fonctions de chiffrement ARM"
+    echo "Compilateur : $("$CC" --version | head -n 1)"
     for f in "$LOGS"/probe-*.log; do
       echo '```'
       head -n 7 "$f"
