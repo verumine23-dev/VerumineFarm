@@ -1,0 +1,115 @@
+name: Essai 32 bits (Termux et compilateur récent)
+
+# Expérience pour savoir si le code de minage peut être compilé pour les téléphones 32 bits.
+# Rien n'est publié : on lit seulement le résumé de l'exécution.
+#   Tâche 1 : compile ccminer dans un vrai Termux 32 bits (émulé), comme sur un téléphone.
+#   Tâche 2 : essaie notre script avec un compilateur Android plus récent (NDK r27c).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  termux:
+    name: Compiler dans Termux (32 bits, émulé)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+    steps:
+      - name: Préparer l'émulation ARM 32 bits
+        run: docker run --rm --privileged aptman/qus -s -- -p arm
+
+      - name: Compiler ccminer comme sur un téléphone avec Termux
+        run: |
+          mkdir -p out && chmod 777 out
+          cat > out/test.sh <<'EOS'
+          #!/data/data/com.termux/files/usr/bin/bash
+          set +e
+          exec > >(tee /out/log.txt) 2>&1
+          echo "== Machine =="; uname -m
+          apt update
+          apt install -yq clang make autoconf automake libtool pkg-config git openssl libcurl jansson binutils
+          echo "== Compilateur =="; clang --version
+          cd "$HOME"
+          git clone --depth 1 https://github.com/Oink70/CCminer-ARM-optimized.git
+          cd CCminer-ARM-optimized
+          git rev-parse HEAD
+          chmod +x build.sh configure.sh autogen.sh
+          echo "== Compilation (build.sh) =="
+          ./build.sh > /out/build.log 2>&1
+          echo "code de sortie : $?"
+          tail -n 40 /out/build.log
+          if [ -f ccminer ]; then
+            echo "== Résultat =="
+            ls -l ccminer
+            readelf -h ccminer | grep -E "Class|Machine"
+            readelf -d ccminer | grep -E "NEEDED|RUNPATH|RPATH"
+            echo "== Test du programme =="
+            timeout 20 ./ccminer --version
+            echo "code du test : $?"
+            echo "== Options de compilation utilisées =="
+            grep -E "^(CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS|LIBS) =" Makefile
+            echo "== Bibliothèques statiques disponibles =="
+            ls "$PREFIX"/lib/*.a 2>/dev/null | grep -E "curl|ssl|crypto|jansson"
+            cp ccminer /out/ccminer-termux-arm
+          else
+            echo "== Aucune compilation réussie =="
+            grep -aE " error: |fatal error" /out/build.log | sort -u | head -n 40
+          fi
+          EOS
+          chmod +x out/test.sh
+          docker run --rm --privileged -v "$PWD/out:/out" ghcr.io/termux-user-repository/termux-docker:arm bash /out/test.sh || true
+
+      - name: Résumé
+        if: always()
+        run: |
+          {
+            echo "## Résultat de la compilation dans Termux (32 bits)"
+            echo '```'
+            tail -n 90 out/log.txt 2>/dev/null || echo "Pas de journal."
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Garder les fichiers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: essai-termux-32bits
+          path: out/*
+          if-no-files-found: ignore
+
+  ndk-recent:
+    name: Compilateur Android récent (NDK r27c, 32 bits)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer le NDK Android récent
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+
+      - name: Installer les outils de compilation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool pkg-config make git
+
+      - name: Essayer la compilation 32 bits
+        env:
+          ABI: armeabi-v7a
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: bash miner/build-android.sh
+
+      - name: Garder les fichiers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: essai-ndk27-32bits
+          path: |
+            miner/out/*
+            miner/logs/*
+          if-no-files-found: ignore
