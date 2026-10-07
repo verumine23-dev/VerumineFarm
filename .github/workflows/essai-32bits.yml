@@ -28,9 +28,26 @@ jobs:
           set +e
           exec > >(tee /out/log.txt) 2>&1
           echo "== Machine =="; uname -m
+          echo "== Installation des paquets (un par un) =="
           apt update
-          apt install -yq clang make autoconf automake libtool pkg-config git openssl libcurl jansson binutils
+          for p in clang make autoconf automake libtool pkg-config git openssl libcurl libjansson binutils file; do
+            apt install -yq "$p" || echo "PAQUET ABSENT OU ERREUR : $p"
+          done
           echo "== Compilateur =="; clang --version
+          RES="$(clang -print-resource-dir)"
+          echo "== En-tête arm_neon.h : $RES/include/arm_neon.h =="
+          grep -n "poly128_t\|vmull_p64\|vaeseq_u8" "$RES/include/arm_neon.h" | head -n 12
+          cat > /tmp/probe.c <<'PROBE'
+          #include <arm_neon.h>
+          poly128_t t_mul(poly64_t a, poly64_t b) { return vmull_p64(a, b); }
+          uint8x16_t t_aes(uint8x16_t a, uint8x16_t b) { return vaesmcq_u8(vaeseq_u8(a, b)); }
+          PROBE
+          echo "== Test des fonctions de chiffrement avec différentes options =="
+          for cand in "" "-march=armv8-a+crypto" "-march=armv8-a+crypto -mfpu=crypto-neon-fp-armv8" "-mcpu=cortex-a53 -mfpu=crypto-neon-fp-armv8"; do
+            echo "-- options : [$cand]"
+            clang -c -x c /tmp/probe.c -o /tmp/probe.o $cand 2>&1 | head -n 3
+            [ -f /tmp/probe.o ] && echo "   => COMPILE OK" && rm -f /tmp/probe.o
+          done
           cd "$HOME"
           git clone --depth 1 https://github.com/Oink70/CCminer-ARM-optimized.git
           cd CCminer-ARM-optimized
@@ -67,7 +84,7 @@ jobs:
           {
             echo "## Résultat de la compilation dans Termux (32 bits)"
             echo '```'
-            tail -n 90 out/log.txt 2>/dev/null || echo "Pas de journal."
+            tail -n 120 out/log.txt 2>/dev/null || echo "Pas de journal."
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -97,6 +114,21 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y autoconf automake libtool pkg-config make git
+
+      - name: Examiner l'en-tête arm_neon.h du compilateur
+        run: |
+          TC="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64"
+          H="$(ls "$TC"/lib/clang/*/include/arm_neon.h | head -n 1)"
+          {
+            echo "## En-tête arm_neon.h du NDK (r27c)"
+            echo '```'
+            "$TC/bin/clang" --version | head -n 1
+            echo "$H"
+            grep -n "poly128_t\|vmull_p64\|vaeseq_u8" "$H" | head -n 12
+            echo "--- contexte de la définition de poly128_t ---"
+            grep -n -B4 "typedef.*poly128_t" "$H" | head -n 20
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Essayer la compilation 32 bits
         env:
