@@ -144,6 +144,24 @@ jobs:
       - name: Préparer l'APK
         run: cp app/build/outputs/apk/release/app-release.apk VerusFarm.apk
 
+      - name: Contrôler l'APK (signature, contenu, compatibilité)
+        run: |
+          set -uo pipefail
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
+          {
+            echo "## Contrôle de l'APK"
+            echo '```'
+            ls -l VerusFarm.apk
+            "$BT/aapt2" dump badging VerusFarm.apk | grep -E "^(package|sdkVersion|targetSdkVersion|native-code|application-label:)" || true
+            echo "--- Signature ---"
+            "$BT/apksigner" verify --verbose --print-certs VerusFarm.apk 2>&1 | head -n 15 || true
+            echo "--- Bibliothèques natives ---"
+            unzip -l VerusFarm.apk | grep -E "lib/" || true
+            echo "--- Alignement ---"
+            if "$BT/zipalign" -c 4 VerusFarm.apk; then echo "alignement OK"; else echo "alignement KO"; fi
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Garder l'APK
         uses: actions/upload-artifact@v4
         with:
