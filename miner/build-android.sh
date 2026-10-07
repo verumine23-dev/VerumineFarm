@@ -6,8 +6,9 @@
 #
 #  Résultat dans miner/out/ :
 #     arm64-v8a-libccminer.so          programme de minage (téléphones 64 bits)
+#     armeabi-v7a-libccminer.so        programme 32 bits (tentative, peut échouer)
 #     armeabi-v7a-libplaceholder.so    bibliothèque vide : permet d'installer l'application
-#                                      sur les téléphones 32 bits (sans minage)
+#                                      sur les téléphones 32 bits
 # =============================================================================
 set -euo pipefail
 
@@ -63,6 +64,31 @@ export AR="$TOOLCHAIN/bin/llvm-ar"
 export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
 export STRIP="$TOOLCHAIN/bin/llvm-strip"
 READELF="$TOOLCHAIN/bin/llvm-readelf"
+
+# 32 bits : on cherche des options qui activent à la fois NEON et le chiffrement ARM.
+# (On interroge le compilateur : il liste les fonctions qu'il active pour chaque jeu d'options.)
+ARM32_OK=1
+if [ "$ABI" = "armeabi-v7a" ]; then
+  ARM32_OK=0
+  for cand in \
+    "-march=armv8-a+crypto -mfpu=crypto-neon-fp-armv8 -mfloat-abi=softfp" \
+    "-mcpu=cortex-a53 -mfpu=crypto-neon-fp-armv8 -mfloat-abi=softfp" \
+    "-march=armv8-a+crypto -mfloat-abi=softfp" \
+    "-march=armv8-a -mfpu=crypto-neon-fp-armv8 -mfloat-abi=softfp"; do
+    # shellcheck disable=SC2086
+    macros="$(echo | "$CC" -dM -E -x c - $cand 2>/dev/null || true)"
+    if grep -q "__ARM_NEON" <<< "$macros" && grep -qE "__ARM_FEATURE_(AES|CRYPTO)" <<< "$macros"; then
+      ARCH_OPT="$cand"
+      ARM32_OK=1
+      break
+    fi
+  done
+  if [ "$ARM32_OK" = 1 ]; then
+    echo "Options 32 bits retenues : $ARCH_OPT"
+  else
+    echo "Aucune option 32 bits n'active NEON et le chiffrement ARM."
+  fi
+fi
 
 COMMON_FLAGS="-O3 -ffast-math -funroll-loops -finline-functions -fomit-frame-pointer -fno-stack-protector -D_REENTRANT -fpic -pthread"
 
@@ -261,6 +287,20 @@ static inline int pthread_cancel(pthread_t t) { (void)t; return 0; }
 #ifndef be64toh
 #define be64toh(x) __builtin_bswap64(x)
 #endif
+
+/* ARM 32 bits : quelques fonctions NEON propres au 64 bits, réécrites */
+#if defined(__arm__) && !defined(__aarch64__) && defined(__ARM_NEON)
+#include <arm_neon.h>
+#ifndef vcopyq_laneq_s32
+#define vcopyq_laneq_s32(a, i, b, j) vsetq_lane_s32(vgetq_lane_s32((b), (j)), (a), (i))
+#endif
+static inline uint8x16_t vqtbl1q_u8(uint8x16_t t, uint8x16_t idx) {
+    uint8x8x2_t tbl;
+    tbl.val[0] = vget_low_u8(t);
+    tbl.val[1] = vget_high_u8(t);
+    return vcombine_u8(vtbl2_u8(tbl, vget_low_u8(idx)), vtbl2_u8(tbl, vget_high_u8(idx)));
+}
+#endif
 #endif
 HDR
 
@@ -285,17 +325,25 @@ HDR
   echo ">>> OK : $OUT/$out_name"
 }
 
-# --- 32 bits : le code de minage de Verus a besoin des instructions de chiffrement ARMv8 ---
-# (AES et multiplication sans retenue), absentes des processeurs ARMv7 : pas de minage possible.
-# On fournit une bibliothèque vide pour que l'application s'installe quand même sur ces
-# téléphones (elle y affichera un message clair au lieu d'être refusée à l'installation).
-if [ "${1:-all}" = "all" ] && [ "$ABI" = "armeabi-v7a" ]; then
+# --- 32 bits : la compilation de ccminer n'est qu'une tentative -----------------
+# (le code de Verus vise le 64 bits). Quoi qu'il arrive, on fournit une bibliothèque vide :
+# elle permet d'installer l'application sur les téléphones 32 bits ; sans programme de
+# minage, l'application y affiche un message clair au lieu d'être refusée à l'installation.
+make_placeholder() {
   echo 'int verusfarm_placeholder(void) { return 0; }' > "$WORK/placeholder.c"
   "$CC" -shared -fPIC -o "$OUT/armeabi-v7a-libplaceholder.so" "$WORK/placeholder.c"
   "$STRIP" --strip-unneeded "$OUT/armeabi-v7a-libplaceholder.so"
-  echo "Bibliothèque vide créée pour armeabi-v7a (pas de minage en 32 bits)."
-  exit 0
-fi
+  echo "Bibliothèque vide créée pour armeabi-v7a."
+}
+
+give_up() {
+  if [ "$ABI" = "armeabi-v7a" ]; then
+    echo "::warning::Pas de programme de minage 32 bits cette fois (voir le résumé)."
+    make_placeholder
+    exit 0
+  fi
+  exit 1
+}
 
 # --- Modes appelés par la boucle plus bas (chacun dans son propre processus) ---
 case "${1:-all}" in
@@ -324,16 +372,23 @@ summarize_failure() {  # summarize_failure <titre> <journal> [config.log]
   } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 }
 
+# 32 bits sans option de chiffrement ARM : inutile d'essayer
+if [ "$ABI" = "armeabi-v7a" ] && [ "$ARM32_OK" != 1 ]; then
+  { echo "### 32 bits : le compilateur n'active pas le chiffrement ARM avec les options essayées."; } \
+    | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+  give_up
+fi
+
 # --- Bibliothèques (une fois par processeur) -----------------------------------
 if [ ! -f "$DEPS_MARKER" ]; then
   if ! bash "${BASH_SOURCE[0]}" deps 2>&1 | tee "$LOGS/$ABI-deps.log"; then
     summarize_failure "bibliothèques pour $ABI" "$LOGS/$ABI-deps.log"
-    exit 1
+    give_up
   fi
 fi
 if [ ! -f "$DEPS_MARKER" ]; then
   echo "Les bibliothèques n'ont pas été compilées correctement." >&2
-  exit 1
+  give_up
 fi
 
 # --- Code source de ccminer ----------------------------------------------------
@@ -361,6 +416,7 @@ done
 
 if [ "$ok" -ne 1 ]; then
   echo "Aucune variante compilée pour $ABI." >&2
-  exit 1
+  give_up
 fi
+if [ "$ABI" = "armeabi-v7a" ]; then make_placeholder; fi
 ls -l "$OUT"
