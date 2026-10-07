@@ -65,12 +65,110 @@ export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
 export STRIP="$TOOLCHAIN/bin/llvm-strip"
 READELF="$TOOLCHAIN/bin/llvm-readelf"
 
+# En-tête de compatibilité : ce que le système Android ne fournit pas (utilisé pour tout le code compilé)
+write_compat_header() {
+  cat > "$WORK/android-compat.h" <<'HDR'
+/* Compatibilité Android (bionic) pour ccminer */
+#ifndef ANDROID_COMPAT_H
+#define ANDROID_COMPAT_H
+#include <endian.h>
+#include <pthread.h>
+
+/* Android n'a pas l'annulation de threads POSIX : fonctions neutres à la place */
+#ifndef PTHREAD_CANCEL_ASYNCHRONOUS
+#define PTHREAD_CANCEL_ENABLE 0
+#define PTHREAD_CANCEL_DISABLE 1
+#define PTHREAD_CANCEL_DEFERRED 0
+#define PTHREAD_CANCEL_ASYNCHRONOUS 1
+static inline int pthread_setcancelstate(int state, int *old) { (void)state; if (old) *old = 0; return 0; }
+static inline int pthread_setcanceltype(int type, int *old) { (void)type; if (old) *old = 0; return 0; }
+static inline void pthread_testcancel(void) {}
+static inline int pthread_cancel(pthread_t t) { (void)t; return 0; }
+#endif
+
+/* Les processeurs ARM d'Android sont little-endian */
+#ifndef htole16
+#define htole16(x) (x)
+#endif
+#ifndef htole32
+#define htole32(x) (x)
+#endif
+#ifndef htole64
+#define htole64(x) (x)
+#endif
+#ifndef le16toh
+#define le16toh(x) (x)
+#endif
+#ifndef le32toh
+#define le32toh(x) (x)
+#endif
+#ifndef le64toh
+#define le64toh(x) (x)
+#endif
+#ifndef htobe16
+#define htobe16(x) __builtin_bswap16(x)
+#endif
+#ifndef htobe32
+#define htobe32(x) __builtin_bswap32(x)
+#endif
+#ifndef htobe64
+#define htobe64(x) __builtin_bswap64(x)
+#endif
+#ifndef be16toh
+#define be16toh(x) __builtin_bswap16(x)
+#endif
+#ifndef be32toh
+#define be32toh(x) __builtin_bswap32(x)
+#endif
+#ifndef be64toh
+#define be64toh(x) __builtin_bswap64(x)
+#endif
+
+/* ARM 32 bits : quelques fonctions NEON propres au 64 bits, réécrites */
+#if defined(__arm__) && !defined(__aarch64__) && defined(__ARM_NEON)
+#include <arm_neon.h>
+#ifndef vcopyq_laneq_s32
+#define vcopyq_laneq_s32(a, i, b, j) vsetq_lane_s32(vgetq_lane_s32((b), (j)), (a), (i))
+#endif
+static inline uint8x16_t vqtbl1q_u8(uint8x16_t t, uint8x16_t idx) {
+    uint8x8x2_t tbl;
+    tbl.val[0] = vget_low_u8(t);
+    tbl.val[1] = vget_high_u8(t);
+    return vcombine_u8(vtbl2_u8(tbl, vget_low_u8(idx)), vtbl2_u8(tbl, vget_high_u8(idx)));
+}
+
+/* Multiplication sans retenue 64x64 -> 128 bits : le compilateur ne la propose pas en 32 bits,
+   on utilise directement l'instruction ARMv8 « vmull.p64 » (le type poly128_t manque aussi). */
+typedef uint64x2_t poly128_t;
+#define vreinterpret_p64_u64(x) (x)
+#define vreinterpretq_p64_u64(x) (x)
+#define vreinterpret_u64_p64(x) (x)
+#define vreinterpretq_u64_p64(x) (x)
+#define vget_lane_p64(v, i) ((poly64_t)vget_lane_u64((v), (i)))
+#define vgetq_lane_p64(v, i) ((poly64_t)vgetq_lane_u64((v), (i)))
+#define vreinterpretq_u64_p128(x) ((uint64x2_t)(x))
+#define vreinterpretq_p128_u64(x) ((poly128_t)(x))
+#define vreinterpretq_u8_p128(x) ((uint8x16_t)(x))
+#define vreinterpretq_p128_u8(x) ((poly128_t)(x))
+static inline poly128_t vmull_p64(poly64_t a, poly64_t b) {
+    uint64x1_t va = vcreate_u64((uint64_t)a);
+    uint64x1_t vb = vcreate_u64((uint64_t)b);
+    uint64x2_t r;
+    __asm__("vmull.p64 %q0, %1, %2" : "=w"(r) : "w"(va), "w"(vb));
+    return r;
+}
+#endif
+#endif
+HDR
+}
+
 # 32 bits : on cherche des options avec lesquelles le compilateur sait VRAIMENT compiler
 # les fonctions de chiffrement ARM (AES et multiplication sans retenue). On essaie de
 # compiler un petit programme de test avec chaque jeu d'options.
 ARM32_OK=1
 if [ "$ABI" = "armeabi-v7a" ]; then
   ARM32_OK=0
+  write_compat_header
   cat > "$WORK/probe.c" <<'PROBE'
 #include <arm_neon.h>
 poly128_t t_mul(poly64_t a, poly64_t b) { return vmull_p64(a, b); }
@@ -86,7 +184,7 @@ PROBE
     n=$((n + 1))
     echo "options : $cand" > "$LOGS/probe-$n.log"
     # shellcheck disable=SC2086
-    if "$CC" -c -x c "$WORK/probe.c" -o "$WORK/probe.o" $cand >> "$LOGS/probe-$n.log" 2>&1; then
+    if "$CC" -c -x c "$WORK/probe.c" -o "$WORK/probe.o" -include "$WORK/android-compat.h" $cand >> "$LOGS/probe-$n.log" 2>&1; then
       ARCH_OPT="$cand"
       ARM32_OK=1
       break
@@ -245,78 +343,7 @@ build_variant() {
   done
 
   # En-tête de compatibilité : ce que le système Android ne fournit pas
-  cat > "$WORK/android-compat.h" <<'HDR'
-/* Compatibilité Android (bionic) pour ccminer */
-#ifndef ANDROID_COMPAT_H
-#define ANDROID_COMPAT_H
-#include <endian.h>
-#include <pthread.h>
-
-/* Android n'a pas l'annulation de threads POSIX : fonctions neutres à la place */
-#ifndef PTHREAD_CANCEL_ASYNCHRONOUS
-#define PTHREAD_CANCEL_ENABLE 0
-#define PTHREAD_CANCEL_DISABLE 1
-#define PTHREAD_CANCEL_DEFERRED 0
-#define PTHREAD_CANCEL_ASYNCHRONOUS 1
-static inline int pthread_setcancelstate(int state, int *old) { (void)state; if (old) *old = 0; return 0; }
-static inline int pthread_setcanceltype(int type, int *old) { (void)type; if (old) *old = 0; return 0; }
-static inline void pthread_testcancel(void) {}
-static inline int pthread_cancel(pthread_t t) { (void)t; return 0; }
-#endif
-
-/* Les processeurs ARM d'Android sont little-endian */
-#ifndef htole16
-#define htole16(x) (x)
-#endif
-#ifndef htole32
-#define htole32(x) (x)
-#endif
-#ifndef htole64
-#define htole64(x) (x)
-#endif
-#ifndef le16toh
-#define le16toh(x) (x)
-#endif
-#ifndef le32toh
-#define le32toh(x) (x)
-#endif
-#ifndef le64toh
-#define le64toh(x) (x)
-#endif
-#ifndef htobe16
-#define htobe16(x) __builtin_bswap16(x)
-#endif
-#ifndef htobe32
-#define htobe32(x) __builtin_bswap32(x)
-#endif
-#ifndef htobe64
-#define htobe64(x) __builtin_bswap64(x)
-#endif
-#ifndef be16toh
-#define be16toh(x) __builtin_bswap16(x)
-#endif
-#ifndef be32toh
-#define be32toh(x) __builtin_bswap32(x)
-#endif
-#ifndef be64toh
-#define be64toh(x) __builtin_bswap64(x)
-#endif
-
-/* ARM 32 bits : quelques fonctions NEON propres au 64 bits, réécrites */
-#if defined(__arm__) && !defined(__aarch64__) && defined(__ARM_NEON)
-#include <arm_neon.h>
-#ifndef vcopyq_laneq_s32
-#define vcopyq_laneq_s32(a, i, b, j) vsetq_lane_s32(vgetq_lane_s32((b), (j)), (a), (i))
-#endif
-static inline uint8x16_t vqtbl1q_u8(uint8x16_t t, uint8x16_t idx) {
-    uint8x8x2_t tbl;
-    tbl.val[0] = vget_low_u8(t);
-    tbl.val[1] = vget_high_u8(t);
-    return vcombine_u8(vtbl2_u8(tbl, vget_low_u8(idx)), vtbl2_u8(tbl, vget_high_u8(idx)));
-}
-#endif
-#endif
-HDR
+  write_compat_header
 
   local flags="$COMMON_FLAGS $arch_flags -w -I$PREFIX/include -include $WORK/android-compat.h"
   local asflags="$COMMON_FLAGS $arch_flags"
