@@ -34,4 +34,6 @@ object DeviceIdentity {
     fun poolUser(ctx: Context): String = "${Prefs.wallet(ctx)}.${workerName(ctx)}"
 
     fun abi(): String = Build.SUPPORTED_ABIS.firstOrNull() ?: "inconnu"
+
+    fun allAbis(): String = Build.SUPPORTED_ABIS.joinToString(", ").ifEmpty { "inconnu" }
 }

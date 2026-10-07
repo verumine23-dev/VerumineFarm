@@ -306,7 +306,7 @@ class MiningService : Service() {
         MiningState.set {
             it.copy(
                 enabled = false, engineOk = false, hashrate = "—", threads = 0, tone = Tone.ERROR,
-                status = "Programme de minage absent pour ce processeur (${DeviceIdentity.abi()})"
+                status = "Aucun programme de minage pour ce processeur (${DeviceIdentity.allAbis()}). Ouvre Plus, puis Diagnostic."
             )
         }
     }

@@ -34,6 +34,10 @@ android {
             storePassword = "verusfarm"
             keyAlias = "verusfarm"
             keyPassword = "verusfarm"
+            // Toutes les versions de signature : meilleure compatibilité avec les installateurs des constructeurs
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
         }
     }
 

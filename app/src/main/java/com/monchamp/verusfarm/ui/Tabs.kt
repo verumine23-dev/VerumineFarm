@@ -25,7 +25,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import com.monchamp.verusfarm.Diagnostics
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +60,17 @@ import com.monchamp.verusfarm.Tone
 fun HomeTab(ui: MiningUi, pool: PoolStats?, device: DeviceInfo, actions: Actions, goTab: (Int) -> Unit) {
     TabColumn {
         BrandHeader(ui.tone)
+
+        if (ui.tone == Tone.ERROR || !ui.engineOk) {
+            NeonCard {
+                Text(
+                    if (!ui.engineOk) "Minage impossible sur cet appareil" else "Une erreur est survenue",
+                    fontWeight = FontWeight.Bold, color = Corail
+                )
+                Text(ui.status, fontSize = 13.sp, color = Texte)
+                Text("Ouvre Plus, puis Diagnostic, pour voir la cause exacte.", fontSize = 12.sp, color = TexteDoux)
+            }
+        }
 
         Column {
             Text("Mon champ de minage", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Texte)
@@ -437,6 +454,11 @@ private fun DeviceCard(
 @Composable
 fun MoreTab(ui: MiningUi, device: DeviceInfo, actions: Actions, onEdit: () -> Unit) {
     var showLogs by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
+    var report by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
     TabColumn {
         TabHeader("Plus", "Réglages et protections")
 
@@ -479,6 +501,36 @@ fun MoreTab(ui: MiningUi, device: DeviceInfo, actions: Actions, onEdit: () -> Un
                     if (ui.logs.isEmpty()) "Aucun message pour le moment." else ui.logs.takeLast(25).joinToString("\n"),
                     fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TexteDoux
                 )
+            }
+        }
+
+        NeonCard {
+            SectionTitle("Diagnostic")
+            Text(
+                "À utiliser si le minage ne démarre pas : vérifie le processeur et teste le programme de minage.",
+                fontSize = 13.sp, color = TexteDoux
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            report = withContext(Dispatchers.IO) { Diagnostics.build(ctx) }
+                            busy = false
+                        }
+                    },
+                    enabled = !busy,
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text(if (busy) "Test en cours…" else "Lancer le diagnostic") }
+                if (report.isNotEmpty()) {
+                    OutlinedButton(
+                        onClick = { clipboard.setText(AnnotatedString(report)) },
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Copier") }
+                }
+            }
+            if (report.isNotEmpty()) {
+                Text(report, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TexteDoux)
             }
         }
 
