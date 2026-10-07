@@ -65,19 +65,28 @@ export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
 export STRIP="$TOOLCHAIN/bin/llvm-strip"
 READELF="$TOOLCHAIN/bin/llvm-readelf"
 
-# 32 bits : on cherche des options qui activent à la fois NEON et le chiffrement ARM.
-# (On interroge le compilateur : il liste les fonctions qu'il active pour chaque jeu d'options.)
+# 32 bits : on cherche des options avec lesquelles le compilateur sait VRAIMENT compiler
+# les fonctions de chiffrement ARM (AES et multiplication sans retenue). On essaie de
+# compiler un petit programme de test avec chaque jeu d'options.
 ARM32_OK=1
 if [ "$ABI" = "armeabi-v7a" ]; then
   ARM32_OK=0
+  cat > "$WORK/probe.c" <<'PROBE'
+#include <arm_neon.h>
+poly128_t t_mul(poly64_t a, poly64_t b) { return vmull_p64(a, b); }
+uint8x16_t t_aes(uint8x16_t a, uint8x16_t b) { return vaesmcq_u8(vaeseq_u8(a, b)); }
+PROBE
+  n=0
   for cand in \
     "-march=armv8-a+crypto -mfpu=crypto-neon-fp-armv8 -mfloat-abi=softfp" \
     "-mcpu=cortex-a53 -mfpu=crypto-neon-fp-armv8 -mfloat-abi=softfp" \
     "-march=armv8-a+crypto -mfloat-abi=softfp" \
+    "-march=armv8-a+crypto -mfpu=neon-fp-armv8 -mfloat-abi=softfp" \
     "-march=armv8-a -mfpu=crypto-neon-fp-armv8 -mfloat-abi=softfp"; do
+    n=$((n + 1))
+    echo "options : $cand" > "$LOGS/probe-$n.log"
     # shellcheck disable=SC2086
-    macros="$(echo | "$CC" -dM -E -x c - $cand 2>/dev/null || true)"
-    if grep -q "__ARM_NEON" <<< "$macros" && grep -qE "__ARM_FEATURE_(AES|CRYPTO)" <<< "$macros"; then
+    if "$CC" -c -x c "$WORK/probe.c" -o "$WORK/probe.o" $cand >> "$LOGS/probe-$n.log" 2>&1; then
       ARCH_OPT="$cand"
       ARM32_OK=1
       break
@@ -86,7 +95,7 @@ if [ "$ABI" = "armeabi-v7a" ]; then
   if [ "$ARM32_OK" = 1 ]; then
     echo "Options 32 bits retenues : $ARCH_OPT"
   else
-    echo "Aucune option 32 bits n'active NEON et le chiffrement ARM."
+    echo "Aucune option 32 bits ne permet de compiler les fonctions de chiffrement ARM."
   fi
 fi
 
@@ -216,6 +225,11 @@ build_variant() {
          configure aclocal.m4 ccminer-config.h stamp-h1
   find . -name '*.o' -delete
   find . -name '.deps' -type d -prune -exec rm -rf {} +
+
+  # 32 bits : sse2neon.h n'accepte que l'ARMv7 exactement ; on l'autorise pour l'ARMv8 en mode 32 bits
+  if [ "$ABI" = "armeabi-v7a" ]; then
+    find . -name 'sse2neon.h' -exec sed -i 's/__ARM_ARCH == 7/__ARM_ARCH >= 7/g' {} +
+  fi
 
   # Macro LIBCURL_CHECK_CONFIG : fournie à aclocal par acinclude.m4
   cp "$PREFIX/share/aclocal/libcurl.m4" acinclude.m4
@@ -374,10 +388,29 @@ summarize_failure() {  # summarize_failure <titre> <journal> [config.log]
 
 # 32 bits sans option de chiffrement ARM : inutile d'essayer
 if [ "$ABI" = "armeabi-v7a" ] && [ "$ARM32_OK" != 1 ]; then
-  { echo "### 32 bits : le compilateur n'active pas le chiffrement ARM avec les options essayées."; } \
-    | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+  {
+    echo "### 32 bits : le compilateur ne sait pas compiler les fonctions de chiffrement ARM"
+    for f in "$LOGS"/probe-*.log; do
+      echo '```'
+      head -n 7 "$f"
+      echo '```'
+    done
+  } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
   give_up
 fi
+
+# Affiche un extrait du code source dans le résumé (pour comprendre une erreur de compilation)
+excerpt() {  # excerpt <variante> <fichier> <début> <fin>
+  local f="$WORK/build-$1/$2"
+  if [ -f "$f" ]; then
+    {
+      echo "Extrait de $2 (lignes $3 à $4) :"
+      echo '```'
+      sed -n "$3,$4p" "$f" | cut -c1-200
+      echo '```'
+    } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+  fi
+}
 
 # --- Bibliothèques (une fois par processeur) -----------------------------------
 if [ ! -f "$DEPS_MARKER" ]; then
@@ -411,6 +444,12 @@ for v in $VARIANTS; do
   else
     echo "::warning::La variante '$v' pour $ABI n'a pas pu être compilée (voir le résumé et les journaux)."
     summarize_failure "$ABI, variante $v" "$LOGS/$ABI-$v.log" "$WORK/build-$v/config.log"
+    if [ "$ABI" = "armeabi-v7a" ]; then
+      excerpt "$v" sse2neon.h 80 100
+      excerpt "$v" sse2neon.h 4670 4690
+      excerpt "$v" verus/verus_clhash_portable.cpp 55 80
+      excerpt "$v" verus/verus_clhash_portable.cpp 285 310
+    fi
   fi
 done
 
