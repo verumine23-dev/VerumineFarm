@@ -28,7 +28,7 @@ object Prefs {
 
     fun customName(ctx: Context): String = sp(ctx).getString("worker_name", "") ?: ""
     fun setCustomName(ctx: Context, value: String) =
-        sp(ctx).edit().putString("worker_name", value.filter { it.isLetterOrDigit() }.take(20)).apply()
+        sp(ctx).edit().putString("worker_name", value.filter { it.isLetterOrDigit() }.lowercase().take(12)).apply()
 
     fun mode(ctx: Context): PowerMode =
         try {

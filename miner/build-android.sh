@@ -388,6 +388,7 @@ give_up() {
 
 # --- Modes appelés par la boucle plus bas (chacun dans son propre processus) ---
 case "${1:-all}" in
+  header)  write_compat_header; echo "En-tête écrit : $WORK/android-compat.h"; exit 0 ;;
   deps)    build_deps; exit 0 ;;
   variant) build_variant "${2:?variante manquante}"; exit 0 ;;
 esac

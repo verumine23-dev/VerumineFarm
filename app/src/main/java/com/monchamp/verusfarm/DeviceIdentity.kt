@@ -22,8 +22,10 @@ object DeviceIdentity {
         } else {
             clean.takeLast(6)
         }
-        val model = Build.MODEL.filter { it.isLetterOrDigit() }.take(12).ifEmpty { "Android" }
-        return model + suffix
+        // Luckpool affiche « noname » si le nom du worker ne lui plaît pas : on reste simple
+        // (minuscules et chiffres, 12 caractères au plus).
+        val model = Build.MODEL.filter { it.isLetterOrDigit() }.lowercase().take(6).ifEmpty { "phone" }
+        return (model + suffix.takeLast(4)).lowercase()
     }
 
     // Nom réellement utilisé : celui choisi par toi, sinon le nom automatique

@@ -362,10 +362,10 @@ fun EditDialog(
                 )
                 OutlinedTextField(
                     value = n,
-                    onValueChange = { n = it.filter { c -> c.isLetterOrDigit() }.take(20) },
+                    onValueChange = { n = it.filter { c -> c.isLetterOrDigit() }.lowercase().take(12) },
                     label = { Text("Nom de l'appareil (facultatif)") },
                     singleLine = true,
-                    supportingText = { Text("Vide = nom automatique : $autoName") }
+                    supportingText = { Text("Lettres et chiffres, 12 au plus. Vide = nom automatique : $autoName") }
                 )
             }
         },

@@ -169,7 +169,7 @@ fun MineTab(ui: MiningUi, pool: PoolStats?, history: List<HashPoint>, device: De
         SectionTitle("Statistiques en temps réel")
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatCard(
-                "Hashrate du champ",
+                "Hashrate total",
                 if (pool != null) fmtHash(pool.hashrate) else "—",
                 Modifier.weight(1f),
                 hint = if (pool != null) "moy. 24h ${fmtHash(pool.avg24h)}" else null,
@@ -420,20 +420,18 @@ private fun DeviceCard(
             ) { Icon(VIcons.Phone, null, tint = Lavande, modifier = Modifier.size(22.dp)) }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(name, fontWeight = FontWeight.Bold, color = Texte, maxLines = 1)
-                    if (isThis) {
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "Cet appareil", fontSize = 10.sp, color = Lavande,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Violet.copy(alpha = 0.25f))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
+                Text(name, fontWeight = FontWeight.Bold, color = Texte, maxLines = 1)
+                if (isThis) {
+                    Text(
+                        "Cet appareil", fontSize = 10.sp, color = Lavande, maxLines = 1, softWrap = false,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Violet.copy(alpha = 0.25f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
                     Dot(if (online) Menthe else Corail, 7)
                     Spacer(Modifier.width(6.dp))
                     Text(

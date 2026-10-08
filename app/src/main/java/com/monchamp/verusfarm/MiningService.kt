@@ -225,8 +225,11 @@ class MiningService : Service() {
     }
 
     // ---------- Ce que dit le mineur ----------
-    private fun onMinerLine(line: String) {
+    private val ansiRegex = Regex("\u001B\\[[0-9;]*[A-Za-z]")
+
+    private fun onMinerLine(rawLine: String) {
         if (stopping) return
+        val line = ansiRegex.replace(rawLine, "")
         MiningState.addLog(line.take(160))
 
         acceptedRegex.find(line)?.let {
