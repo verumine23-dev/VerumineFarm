@@ -162,6 +162,42 @@ static inline poly128_t vmull_p64(poly64_t a, poly64_t b) {
 HDR
 }
 
+# 32 bits : la copie de sse2neon.h fournie avec ccminer se trompe sur plusieurs fonctions (essai « calculs »).
+# On la remplace par la version récente, qui passe les mêmes tests sans aucune différence avec x86.
+use_recent_sse2neon() {
+  local new="$WORK/sse2neon-recent.h" own n h
+  if [ ! -s "$new" ]; then
+    if ! curl -fsSL --retry 3 -o "$new" "https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h"; then
+      echo "sse2neon récent indisponible : on garde la version du dépôt."
+      rm -f "$new"
+      return 0
+    fi
+  fi
+  echo "sse2neon récent utilisé (empreinte $(sha256sum "$new" | cut -c1-16))"
+  # Fonctions « _mm_... » que le code de Verus définit lui-même : on les renomme dans sse2neon pour éviter les doublons
+  own="$(python3 - <<'PY'
+import re, glob, os
+pat = re.compile(r'(?m)^[ \t]*(?:static[ \t]+|inline[ \t]+|FORCE_INLINE[ \t]+|extern[ \t]+)*[A-Za-z_][\w \t\*&:<>]*?[ \t\*&](_mm_[A-Za-z0-9_]+)[ \t]*\([^;{}]*\)[ \t\r\n]*(?:const[ \t]*)?\{')
+names = set()
+for f in glob.glob('**/*', recursive=True):
+    if not os.path.isfile(f) or not f.endswith(('.c', '.cpp', '.cc', '.h', '.hpp')):
+        continue
+    if os.path.basename(f) == 'sse2neon.h':
+        continue
+    try:
+        names.update(pat.findall(open(f, errors='ignore').read()))
+    except Exception:
+        pass
+print(' '.join(sorted(names)))
+PY
+)"
+  echo "Fonctions définies par le code de Verus : ${own:-aucune}"
+  while IFS= read -r h; do
+    cp "$new" "$h"
+    for n in $own; do sed -i "s/\\b$n\\b/_s2n_$n/g" "$h"; done
+  done < <(find . -name 'sse2neon.h')
+}
+
 # 32 bits : on cherche des options avec lesquelles le compilateur sait VRAIMENT compiler
 # les fonctions de chiffrement ARM (AES et multiplication sans retenue). On essaie de
 # compiler un petit programme de test avec chaque jeu d'options.
@@ -324,8 +360,10 @@ build_variant() {
   find . -name '*.o' -delete
   find . -name '.deps' -type d -prune -exec rm -rf {} +
 
-  # 32 bits : sse2neon.h n'accepte que l'ARMv7 exactement ; on l'autorise pour l'ARMv8 en mode 32 bits
+  # 32 bits : version récente de sse2neon.h (l'ancienne se trompe sur plusieurs fonctions)
   if [ "$ABI" = "armeabi-v7a" ]; then
+    if [ "${USE_NEW_SSE2NEON:-1}" = 1 ]; then use_recent_sse2neon; fi
+    # (au cas où l'ancienne version est gardée) : elle n'accepte que l'ARMv7 exactement
     find . -name 'sse2neon.h' -exec sed -i 's/__ARM_ARCH == 7/__ARM_ARCH >= 7/g' {} +
   fi
 
