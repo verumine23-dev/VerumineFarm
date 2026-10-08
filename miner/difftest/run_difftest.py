@@ -53,7 +53,7 @@ static uint64_t fnv(uint64_t h, __m128i v) { uint8_t b[16]; _mm_storeu_si128((__
 static uint64_t fnvi(uint64_t h, long long v) { return fnvb(h, (const uint8_t *)&v, 8); }
 #if defined(__ANDROID__)
 /* La bibliothèque Android exige un segment de données par thread aligné sur 32 octets */
-__attribute__((used)) static __thread char tls_pad[1] __attribute__((aligned(32))) = {1};
+__attribute__((used, retain)) static __thread char tls_pad[1] __attribute__((aligned(32))) = {1};
 #endif
 static __m128i A[N], B[N], C[N];
 static long long X[N];
@@ -70,6 +70,9 @@ static long long X[N];
 #define TEST_F32(fn) { uint64_t h = FNV0; for (int i = 0; i < N; i++) h = fnv(h, fn((int)X[i])); OUT(#fn, h); }
 #define TEST_F64(fn) { uint64_t h = FNV0; for (int i = 0; i < N; i++) h = fnv(h, fn((long long)X[i])); OUT(#fn, h); }
 int main(void) {
+#if defined(__ANDROID__)
+  if (tls_pad[0] == 2) return 3;
+#endif
   for (int i = 0; i < N; i++) {
     uint8_t buf[16];
     for (int k = 0; k < 2; k++) { uint64_t v = rnd(); memcpy(buf + 8 * k, &v, 8); }
@@ -125,15 +128,18 @@ def arm_run(a, kind):
                  "-include", a.compat, "-I", a.dir]
     else:
         cc = ["arm-linux-gnueabihf-gcc"]
-        flags = ["-O2", "-w", "-static", "-march=armv8-a+crypto", "-mfpu=crypto-neon-fp-armv8",
-                 "-flax-vector-conversions", "-fno-strict-aliasing", "-I", a.dir]
+        flags = ["-O2", "-static", "-march=armv8-a+crypto", "-mfpu=crypto-neon-fp-armv8",
+                 "-flax-vector-conversions", "-fno-strict-aliasing", "-Werror=implicit-function-declaration",
+                 "-I", a.dir]
     skips = set()
     for _ in range(60):
         open(src, "w").write(build_source(skips))
         r = run(cc + flags + [src, "-o", exe])
         if r.returncode == 0:
             break
-        new = set(re.findall(r"[`'](_mm_[A-Za-z0-9_]+)'", r.stderr)) - skips
+        found = set(re.findall(r"[`'\u2018](_mm_[A-Za-z0-9_]+)['\u2019]", r.stderr))
+        found |= set(re.findall(r"TEST_\w+\((_mm_[A-Za-z0-9_]+)", r.stderr))
+        new = found - skips
         if not new:
             return None, "Compilation impossible :\n" + r.stderr[:2000]
         skips |= new
