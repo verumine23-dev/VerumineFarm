@@ -69,6 +69,20 @@ static long long X[N];
 #define TEST_INS64(fn, imm) { uint64_t h = FNV0; for (int i = 0; i < N; i++) h = fnv(h, fn(A[i], (long long)X[i], imm)); OUT(#fn "/" #imm, h); }
 #define TEST_F32(fn) { uint64_t h = FNV0; for (int i = 0; i < N; i++) h = fnv(h, fn((int)X[i])); OUT(#fn, h); }
 #define TEST_F64(fn) { uint64_t h = FNV0; for (int i = 0; i < N; i++) h = fnv(h, fn((long long)X[i])); OUT(#fn, h); }
+/* Multiplication sans retenue : x86 = vraie instruction ; ARM = notre instruction écrite à la main (même texte que dans l'en-tête) */
+#if defined(__x86_64__)
+static __m128i shim_vmull(uint64_t a, uint64_t b) {
+  return _mm_clmulepi64_si128(_mm_cvtsi64_si128((long long)a), _mm_cvtsi64_si128((long long)b), 0x00);
+}
+#else
+static __m128i shim_vmull(uint64_t a, uint64_t b) {
+  uint64x1_t va = vcreate_u64(a);
+  uint64x1_t vb = vcreate_u64(b);
+  uint64x2_t r;
+  __asm__("vmull.p64 %q0, %1, %2" : "=w"(r) : "w"(va), "w"(vb));
+  return vreinterpretq_s64_u64(r);
+}
+#endif
 int main(void) {
 #if defined(__ANDROID__)
   if (tls_pad[0] == 2) return 3;
@@ -102,6 +116,8 @@ def build_source(skips):
     for d, kind in ((TI1, "TI1"), (TI2, "TI2"), (SI1, "SI1"), (INS, "INS"), (INS64, "INS64")):
         for f, imms in d.items():
             for imm in imms: add(kind, f, hex(imm) if imm > 15 else str(imm))
+    lines.append("  { uint64_t h = FNV0; for (int i = 0; i < N; i++) { h = fnv(h, shim_vmull((uint64_t)_mm_cvtsi128_si64(A[i]), (uint64_t)_mm_cvtsi128_si64(B[i]))); "
+                 "h = fnv(h, shim_vmull((uint64_t)_mm_extract_epi64(A[i], 1), (uint64_t)_mm_extract_epi64(B[i], 1))); } OUT(\"shim_vmull_p64\", h); }\n")
     lines.append("  return 0;\n}\n")
     return "".join(lines)
 
