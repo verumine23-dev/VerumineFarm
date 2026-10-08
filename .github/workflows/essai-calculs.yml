@@ -1,0 +1,55 @@
+name: Essai des calculs 32 bits (sse2neon contre x86)
+
+# Pourquoi Luckpool rejette presque toutes les parts du programme 32 bits ?
+# Cet essai compare les fonctions de calcul émulées sur ARM 32 bits avec les vraies instructions x86 :
+# celles dont le résultat diffère sont fausses. Rien n'est publié : on lit le « Summary ».
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  comparer:
+    name: Comparer sse2neon (ARM 32 bits) et x86
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer le NDK Android
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+
+      - name: Installer les outils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static build-essential git python3
+
+      - name: Préparer l'en-tête et les deux versions de sse2neon
+        env:
+          ABI: armeabi-v7a
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -e
+          bash miner/build-android.sh header
+          git clone --depth 1 https://github.com/Oink70/CCminer-ARM-optimized.git src
+          mkdir -p hdr_old hdr_new
+          cp src/sse2neon.h hdr_old/sse2neon.h
+          sed -i 's/__ARM_ARCH == 7/__ARM_ARCH >= 7/g' hdr_old/sse2neon.h
+          curl -fsSL -o hdr_new/sse2neon.h https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h
+          ls -l hdr_old hdr_new
+
+      - name: Comparer
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          {
+            python3 miner/difftest/run_difftest.py --label "sse2neon du dépôt de ccminer" --dir hdr_old --work work_old
+            echo
+            python3 miner/difftest/run_difftest.py --label "sse2neon récent (DLTcollab)" --dir hdr_new --work work_new
+          } | tee -a "$GITHUB_STEP_SUMMARY"
