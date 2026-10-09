@@ -174,7 +174,7 @@ use_recent_sse2neon() {
     fi
   fi
   echo "sse2neon récent utilisé (empreinte $(sha256sum "$new" | cut -c1-16))"
-  # Fonctions « _mm_... » que le code de Verus définit lui-même : on les renomme dans sse2neon pour éviter les doublons
+  # Pour information : fonctions « _mm_... » que le code de Verus définit lui-même
   own="$(python3 - <<'PY'
 import re, glob, os
 pat = re.compile(r'(?m)^[ \t]*(?:static[ \t]+|inline[ \t]+|FORCE_INLINE[ \t]+|extern[ \t]+)*[A-Za-z_][\w \t\*&:<>]*?[ \t\*&](_mm_[A-Za-z0-9_]+)[ \t]*\([^;{}]*\)[ \t\r\n]*(?:const[ \t]*)?\{')
@@ -192,9 +192,9 @@ print(' '.join(sorted(names)))
 PY
 )"
   echo "Fonctions définies par le code de Verus : ${own:-aucune}"
+  # (Pas de renommage d'office : on ne renomme que si la compilation signale un vrai doublon.)
   while IFS= read -r h; do
     cp "$new" "$h"
-    for n in $own; do sed -i "s/\\b$n\\b/_s2n_$n/g" "$h"; done
   done < <(find . -name 'sse2neon.h')
 }
 
@@ -395,7 +395,24 @@ build_variant() {
     PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig" \
     $OMP_CONF
 
-  make -k -j"$JOBS"
+  local rc clash h n
+  set +e
+  make -k -j"$JOBS" 2>&1 | tee make.log
+  rc=${PIPESTATUS[0]}
+  if [ "$rc" -ne 0 ] && [ "$ABI" = "armeabi-v7a" ]; then
+    clash="$(grep -aoE "(redefinition of|conflicting types for|previous definition of|previous declaration of) '_mm_[A-Za-z0-9_]+'" make.log \
+      | grep -oE "_mm_[A-Za-z0-9_]+" | sort -u | tr '\n' ' ')"
+    if [ -n "$clash" ]; then
+      echo "Doublons avec sse2neon : $clash : on les renomme dans sse2neon.h puis on recompile."
+      while IFS= read -r h; do
+        for n in $clash; do sed -i "s/\\b$n\\b/_s2n_$n/g" "$h"; done
+      done < <(find . -name 'sse2neon.h')
+      make -k -j"$JOBS" 2>&1 | tee make2.log
+      rc=${PIPESTATUS[0]}
+    fi
+  fi
+  set -e
+  [ "$rc" -eq 0 ]
   test -f ccminer
 
   "$STRIP" --strip-unneeded ccminer
