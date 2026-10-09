@@ -139,7 +139,7 @@ jobs:
           gradle-version: "8.7"
 
       - name: Fabriquer l'application
-        run: gradle :app:assembleRelease --no-daemon --stacktrace
+        run: gradle :app:assembleRelease -PbuildNumber=${{ github.run_number }} --no-daemon --stacktrace
 
       - name: Préparer l'APK
         run: cp app/build/outputs/apk/release/app-release.apk VerusFarm.apk
